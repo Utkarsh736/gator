@@ -44,6 +44,20 @@ func (c *commands) run(s *state, cmd command) error {
 	return handler(s, cmd)
 }
 
+// middlewareLoggedIn wraps handlers that require a logged-in user
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		// Get current user
+		user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			return fmt.Errorf("couldn't get current user: %w", err)
+		}
+
+		// Call the wrapped handler with the user
+		return handler(s, cmd, user)
+	}
+}
+
 // handlerRegister creates a new user
 func handlerRegister(s *state, cmd command) error {
 	if len(cmd.args) == 0 {
@@ -120,7 +134,6 @@ func handlerReset(s *state, cmd command) error {
 	return nil
 }
 
-
 // handlerUsers lists all users in the database
 func handlerUsers(s *state, cmd command) error {
 	users, err := s.db.GetUsers(context.Background())
@@ -148,7 +161,6 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
-
 // handlerAgg fetches and displays an RSS feed
 func handlerAgg(s *state, cmd command) error {
 	// Fetch the feed
@@ -175,7 +187,7 @@ func handlerAgg(s *state, cmd command) error {
 }
 
 // handlerAddFeed adds a new feed for the current user
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return errors.New("addfeed command requires name and url arguments")
 	}
@@ -183,13 +195,7 @@ func handlerAddFeed(s *state, cmd command) error {
 	name := cmd.args[0]
 	url := cmd.args[1]
 
-	// Get current user
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return fmt.Errorf("couldn't get current user: %w", err)
-	}
-
-	// Create feed
+	// Create feed (user is already provided)
 	feed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
 		ID:        uuid.New(),
 		CreatedAt: time.Now(),
@@ -200,11 +206,23 @@ func handlerAddFeed(s *state, cmd command) error {
 	})
 
 	if err != nil {
-		// Check if it's a duplicate URL error
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return fmt.Errorf("feed with URL %s already exists", url)
 		}
 		return fmt.Errorf("couldn't create feed: %w", err)
+	}
+
+	// Automatically create feed follow
+	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("couldn't follow feed: %w", err)
 	}
 
 	fmt.Println("Feed created successfully:")
@@ -213,6 +231,7 @@ func handlerAddFeed(s *state, cmd command) error {
 	fmt.Printf("  URL: %s\n", feed.Url)
 	fmt.Printf("  User ID: %s\n", feed.UserID)
 	fmt.Printf("  Created at: %s\n", feed.CreatedAt)
+	fmt.Println("(Automatically followed)")
 
 	return nil
 }
@@ -237,6 +256,89 @@ func handlerFeeds(s *state, cmd command) error {
 		fmt.Println()
 	}
 
+	return nil
+}
+
+// handlerFollow follows a feed by URL
+func handlerFollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) == 0 {
+		return errors.New("follow command requires a URL argument")
+	}
+
+	url := cmd.args[0]
+
+	// Get feed by URL
+	feed, err := s.db.GetFeedByURL(context.Background(), url)
+	if err != nil {
+		return fmt.Errorf("couldn't find feed: %w", err)
+	}
+
+	// Create feed follow
+	feedFollow, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+
+	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			return fmt.Errorf("already following this feed")
+		}
+		return fmt.Errorf("couldn't follow feed: %w", err)
+	}
+
+	fmt.Printf("%s is now following %s\n", feedFollow.UserName, feedFollow.FeedName)
+	return nil
+}
+
+// handlerFollowing lists feeds the current user is following
+func handlerFollowing(s *state, cmd command, user database.User) error {
+	// Get feed follows
+	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		return fmt.Errorf("couldn't get feed follows: %w", err)
+	}
+
+	if len(follows) == 0 {
+		fmt.Println("Not following any feeds")
+		return nil
+	}
+
+	fmt.Printf("Feeds followed by %s:\n", user.Name)
+	for _, follow := range follows {
+		fmt.Printf("* %s\n", follow.FeedName)
+	}
+
+	return nil
+}
+
+// handlerUnfollow unfollows a feed by URL
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) == 0 {
+		return errors.New("unfollow command requires a URL argument")
+	}
+
+	url := cmd.args[0]
+
+	// Get feed by URL
+	feed, err := s.db.GetFeedByURL(context.Background(), url)
+	if err != nil {
+		return fmt.Errorf("couldn't find feed: %w", err)
+	}
+
+	// Delete feed follow
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("couldn't unfollow feed: %w", err)
+	}
+
+	fmt.Printf("%s has unfollowed %s\n", user.Name, feed.Name)
 	return nil
 }
 

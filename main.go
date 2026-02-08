@@ -2,33 +2,57 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"os"
 
 	"github.com/Utkarsh736/gator/internal/config"
 )
 
 func main() {
-	// Step 1: Read the initial config
+	// Read the config file
 	cfg, err := config.Read()
 	if err != nil {
-		log.Fatalf("Error reading config: %v", err)
+		fmt.Fprintf(os.Stderr, "Error reading config: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Println("Initial config:")
-	fmt.Printf("%+v\n\n", cfg)
 
-	// Step 2: Set the current user (replace "lane" with your name)
-	err = cfg.SetUser("Utkarsh")
-	if err != nil {
-		log.Fatalf("Error setting user: %v", err)
+	// Initialize application state
+	appState := &state{
+		cfg: &cfg,
 	}
-	fmt.Println("Updated user to: Utkarsh")
 
-	// Step 3: Read the config again to verify
-	cfg, err = config.Read()
-	if err != nil {
-		log.Fatalf("Error reading config after update: %v", err)
+	// Initialize commands registry
+	cmds := &commands{
+		handlers: make(map[string]func(*state, command) error),
 	}
-	fmt.Println("\nConfig after update:")
-	fmt.Printf("%+v\n", cfg)
+
+	// Register command handlers
+	cmds.register("login", handlerLogin)
+
+	// Parse command-line arguments
+	args := os.Args
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Error: not enough arguments provided")
+		fmt.Fprintln(os.Stderr, "Usage: gator <command> [args...]")
+		os.Exit(1)
+	}
+
+	// Create command from args
+	cmdName := args[1]
+	cmdArgs := []string{}
+	if len(args) > 2 {
+		cmdArgs = args[2:]
+	}
+
+	cmd := command{
+		name: cmdName,
+		args: cmdArgs,
+	}
+
+	// Run the command
+	err = cmds.run(appState, cmd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 

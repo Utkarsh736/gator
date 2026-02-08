@@ -1,10 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 
 	"github.com/Utkarsh736/gator/internal/config"
+	"github.com/Utkarsh736/gator/internal/database"
+	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -15,8 +18,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Open database connection
+	db, err := sql.Open("postgres", cfg.DbURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// Create database queries
+	dbQueries := database.New(db)
+
 	// Initialize application state
 	appState := &state{
+		db:  dbQueries,
 		cfg: &cfg,
 	}
 
@@ -27,6 +42,9 @@ func main() {
 
 	// Register command handlers
 	cmds.register("login", handlerLogin)
+	cmds.register("register", handlerRegister)
+	cmds.register("reset", handlerReset)
+	cmds.register("users", handlerUsers)
 
 	// Parse command-line arguments
 	args := os.Args

@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Utkarsh736/gator/internal/config"
+	"github.com/Utkarsh736/gator/internal/database"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
-// state holds the application state (config, later DB connection)
+// state holds the application state (config, DB connection)
 type state struct {
+	db  *database.Queries
 	cfg *config.Config
 }
 
@@ -37,6 +44,44 @@ func (c *commands) run(s *state, cmd command) error {
 	return handler(s, cmd)
 }
 
+// handlerRegister creates a new user
+func handlerRegister(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return errors.New("register command requires a username argument")
+	}
+
+	name := cmd.args[0]
+
+	// Create user in database
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      name,
+	})
+
+	if err != nil {
+		// Check if it's a duplicate key error
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			return fmt.Errorf("user %s already exists", name)
+		}
+		return fmt.Errorf("couldn't create user: %w", err)
+	}
+
+	// Set current user in config
+	err = s.cfg.SetUser(name)
+	if err != nil {
+		return fmt.Errorf("couldn't set current user: %w", err)
+	}
+
+	fmt.Println("User created successfully:")
+	fmt.Printf("  ID: %s\n", user.ID)
+	fmt.Printf("  Name: %s\n", user.Name)
+	fmt.Printf("  Created at: %s\n", user.CreatedAt)
+
+	return nil
+}
+
 // handlerLogin sets the current user in the config
 func handlerLogin(s *state, cmd command) error {
 	if len(cmd.args) == 0 {
@@ -45,12 +90,61 @@ func handlerLogin(s *state, cmd command) error {
 
 	username := cmd.args[0]
 
-	err := s.cfg.SetUser(username)
+	// Check if user exists in database
+	_, err := s.db.GetUser(context.Background(), username)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("user %s doesn't exist", username)
+		}
+		return fmt.Errorf("couldn't get user: %w", err)
+	}
+
+	// Set current user
+	err = s.cfg.SetUser(username)
 	if err != nil {
 		return fmt.Errorf("couldn't set current user: %w", err)
 	}
 
 	fmt.Printf("User has been set to: %s\n", username)
+	return nil
+}
+
+// handlerReset deletes all users from the database
+func handlerReset(s *state, cmd command) error {
+	err := s.db.DeleteAllUsers(context.Background())
+	if err != nil {
+		return fmt.Errorf("couldn't reset database: %w", err)
+	}
+
+	fmt.Println("Database has been reset successfully")
+	return nil
+}
+
+
+// handlerUsers lists all users in the database
+func handlerUsers(s *state, cmd command) error {
+	users, err := s.db.GetUsers(context.Background())
+	if err != nil {
+		return fmt.Errorf("couldn't get users: %w", err)
+	}
+
+	if len(users) == 0 {
+		fmt.Println("No users found")
+		return nil
+	}
+
+	// Get current user from config
+	currentUser := s.cfg.CurrentUserName
+
+	// Print all users
+	for _, user := range users {
+		if user.Name == currentUser {
+			fmt.Printf("* %s (current)\n", user.Name)
+		} else {
+			fmt.Printf("* %s\n", user.Name)
+		}
+	}
+
 	return nil
 }
 

@@ -148,3 +148,95 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
+
+// handlerAgg fetches and displays an RSS feed
+func handlerAgg(s *state, cmd command) error {
+	// Fetch the feed
+	feed, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return fmt.Errorf("couldn't fetch feed: %w", err)
+	}
+
+	// Print the entire feed structure
+	fmt.Printf("Feed: %s\n", feed.Channel.Title)
+	fmt.Printf("Link: %s\n", feed.Channel.Link)
+	fmt.Printf("Description: %s\n", feed.Channel.Description)
+	fmt.Println("\nItems:")
+	fmt.Println("------")
+
+	for i, item := range feed.Channel.Item {
+		fmt.Printf("\n[%d] %s\n", i+1, item.Title)
+		fmt.Printf("    Link: %s\n", item.Link)
+		fmt.Printf("    Published: %s\n", item.PubDate)
+		fmt.Printf("    Description: %s\n", item.Description)
+	}
+
+	return nil
+}
+
+// handlerAddFeed adds a new feed for the current user
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return errors.New("addfeed command requires name and url arguments")
+	}
+
+	name := cmd.args[0]
+	url := cmd.args[1]
+
+	// Get current user
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return fmt.Errorf("couldn't get current user: %w", err)
+	}
+
+	// Create feed
+	feed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      name,
+		Url:       url,
+		UserID:    user.ID,
+	})
+
+	if err != nil {
+		// Check if it's a duplicate URL error
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			return fmt.Errorf("feed with URL %s already exists", url)
+		}
+		return fmt.Errorf("couldn't create feed: %w", err)
+	}
+
+	fmt.Println("Feed created successfully:")
+	fmt.Printf("  ID: %s\n", feed.ID)
+	fmt.Printf("  Name: %s\n", feed.Name)
+	fmt.Printf("  URL: %s\n", feed.Url)
+	fmt.Printf("  User ID: %s\n", feed.UserID)
+	fmt.Printf("  Created at: %s\n", feed.CreatedAt)
+
+	return nil
+}
+
+// handlerFeeds lists all feeds in the database
+func handlerFeeds(s *state, cmd command) error {
+	feeds, err := s.db.GetFeeds(context.Background())
+	if err != nil {
+		return fmt.Errorf("couldn't get feeds: %w", err)
+	}
+
+	if len(feeds) == 0 {
+		fmt.Println("No feeds found")
+		return nil
+	}
+
+	fmt.Println("Feeds:")
+	for _, feed := range feeds {
+		fmt.Printf("* Name: %s\n", feed.Name)
+		fmt.Printf("  URL: %s\n", feed.Url)
+		fmt.Printf("  User: %s\n", feed.UserName)
+		fmt.Println()
+	}
+
+	return nil
+}
+

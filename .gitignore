@@ -1,0 +1,14 @@
+# Binaries
+gator
+*.exe
+*.out
+
+# Go
+*.test
+*.prof
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
